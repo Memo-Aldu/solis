@@ -1,0 +1,5 @@
+.venv/
+/solis/config.py
+.vscode
+.idea
+__pycache__/
