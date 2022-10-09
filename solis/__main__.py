@@ -1,5 +1,5 @@
 import os
-import bot
+from solis.bot import bot
 if os.name != "nt":
     import uvloop
 

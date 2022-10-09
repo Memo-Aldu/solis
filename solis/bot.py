@@ -4,7 +4,10 @@ import asyncio
 import hikari
 import lightbulb
 import logging
+import miru
 import config
+import solis.helper.riddle
+from solis.views.view import ButtonView
 from __init__ import __version__
 from aiohttp import ClientSession
 from pytz import utc
@@ -23,12 +26,14 @@ bot = lightbulb.BotApp(
     owner_ids=config.OWNERS_ID,
     help_slash_command=True,
     case_insensitive_prefix_commands=True,
-    prefix="!"
+    prefix="!",
+    intents=hikari.Intents.ALL
 
 )
 bot.d.scheduler = AsyncIOScheduler()
 bot.d.scheduler.configure(timezome=utc)
 bot.load_extensions_from("../solis/extensions")
+miru.load(bot)
 
 
 @bot.listen(hikari.StartingEvent)
@@ -75,6 +80,18 @@ async def ping(ctx):
         f"Pong! DWSP latency: {ctx.bot.heartbeat_latency * 1_000:,.0f} ms.")
 
 
+@bot.command
+@lightbulb.command('button', 'button test')
+@lightbulb.implements(lightbulb.SlashCommand)
+async def button(ctx: lightbulb.SlashContext):
+    view = ButtonView(timeout=60)
+    message = await ctx.respond("Button test", components=view.build())
+    message = await message
+    view.start(message)
+    await view.wait()
+    print("All done.")
+
+
 def run() -> None:
     setup()
     bot.run(
@@ -116,23 +133,23 @@ async def on_guild_message_event(event: hikari.GuildMessageCreateEvent) -> None:
                                      user_mentions=True,
                                      mentions_reply=True)
         await resp.add_reaction("❌")
-        await resp.add_reaction("✔")
+        await resp.add_reaction("✅")
         is_playing_riddle = True
         try:
             reaction = await bot.wait_for(
                 hikari.ReactionAddEvent,
                 timeout=10,
-                predicate=lambda newEvent:
-                isinstance(newEvent, hikari.ReactionEvent)
-                and newEvent.user_id == event_author.id
-                and str(newEvent.emoji_name) in {"❌", "✔"}
+                predicate=lambda new_event:
+                isinstance(new_event, hikari.ReactionEvent)
+                and new_event.user_id == event_author.id
+                and str(new_event.emoji_name) in {"❌", "✅"}
             )
-            if reaction.emoji_name == "✔":
+            if reaction.emoji_name == "✅":
                 await resp.remove_reaction(emoji="❌")
-                await on_riddle(message)
+                await solis.helper.riddle.on_riddle(message)
                 is_playing_riddle = False
             else:
-                await resp.remove_reaction(emoji="✔")
+                await resp.remove_reaction(emoji="✅")
                 await resp.edit("Okay maybe next time!")
                 is_playing_riddle = False
 
@@ -151,51 +168,3 @@ async def on_command_error(event: lightbulb.CommandErrorEvent) -> None:
     raise event.exception
 
 
-async def on_riddle(event_riddle_message) -> None:
-    timer = 60  # seconds
-    is_correct_answer = False
-    async with bot.d.session.get(
-            "https://ibk-riddles-api.herokuapp.com/"
-    ) as response:
-        api_res = await response.json()
-
-        if response.ok:
-            question = api_res["question"]
-            answer = (api_res["answer"]).lower().strip(",.!")
-            print(answer)
-            embed = hikari.Embed(colour=0xCCEE44)
-            embed.set_author(name=question)
-            embed.add_field("Time left ", str(timer) + "s", inline=True)
-            embed.set_footer(
-                text=f"Requested by {event_riddle_message.member.display_name}",
-                icon=event_riddle_message.member.avatar_url or event_riddle_message.member.default_avatar_url,
-            )
-            resp = await event_riddle_message.respond(embed)
-            while True:
-                if timer == 0:
-                    embed.edit_field(0, "Time is up!", ":c")
-                    embed.add_field("The answer is", "||" + answer + "||", inline=True)
-                    break
-                embed.edit_field(0, "Time left: ", str(timer) + "s")
-                await resp.edit(embed=embed)
-                try:
-                    await bot.wait_for(
-                        hikari.MessageCreateEvent,
-                        timeout=1,
-                        predicate=lambda newEvent:
-                        isinstance(newEvent, hikari.MessageCreateEvent)
-                        and newEvent.message.author == event_riddle_message.author
-                        and newEvent.message.channel_id == event_riddle_message.channel_id
-                        and answer.lower() == newEvent.message.content.lower()
-                    )
-                except asyncio.TimeoutError:
-                    timer -= 1
-                else:
-                    is_correct_answer = True
-                    embed.add_field("The answer is", "||" + answer + "||", inline=True)
-                    break
-            if is_correct_answer:
-                await resp.edit(f"{event_riddle_message.author.mention} You guessed right!", embed=embed, components=[])
-            else:
-                await resp.edit(f"{event_riddle_message.author.mention} Your countdown Has ended!", embed=embed,
-                                components=[])
